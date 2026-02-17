@@ -1,39 +1,68 @@
-from dotenv import load_dotenv
-import os
-from langchain_core.prompts import PromptTemplate  
-from langchain_openai import ChatOpenAI
-from langchain_ollama import ChatOllama
+from typing import List
 
+from dotenv import load_dotenv
+from langchain_core.messages import HumanMessage, ToolMessage
+from langchain.tools import tool, BaseTool
+from langchain_openai import ChatOpenAI
+
+from callbacks import AgentCallbackHandler
 
 load_dotenv()
 
+@tool
+def get_text_length(text: str) -> int:
+    """Returns the length of a text by characters"""
+    print(f"get_text_length enter with {text=}")
+    text = text.strip("'\n").strip(
+        '"'
+    )  # stripping away non alphabetic characters just in case
 
-def main():
-    information = """
-    Elon Reeve Musk (/ˈiːlɒn/ EE-lon; born June 28, 1971) is a businessman and entrepreneur known for his leadership of Tesla, SpaceX, Twitter, and xAI. Musk has been the wealthiest person in the world since 2025; as of February 2026, Forbes estimates his net worth to be around US$852 billion.
+    return len(text)
 
-Born into a wealthy family in Pretoria, South Africa, Musk emigrated in 1989 to Canada; he has Canadian citizenship since his mother was born there. He received bachelor's degrees in 1997 from the University of Pennsylvania before moving to California to pursue business ventures. In 1995, Musk co-founded the software company Zip2. Following its sale in 1999, he co-founded X.com, an online payment company that later merged to form PayPal, which was acquired by eBay in 2002. Musk also became an American citizen in 2002.
 
-In 2002, Musk founded the space technology company SpaceX, becoming its CEO and chief engineer; the company has since led innovations in reusable rockets and commercial spaceflight. Musk joined the automaker Tesla as an early investor in 2004 and became its CEO and product architect in 2008; it has since become a leader in electric vehicles. In 2015, he co-founded OpenAI to advance artificial intelligence (AI) research, but later left; growing discontent with the organization's direction and their leadership in the AI boom in the 2020s led him to establish xAI, which became a subsidiary of SpaceX in 2026. In 2022, he acquired the social network Twitter, implementing significant changes, and rebranding it as X in 2023. His other businesses include the neurotechnology company Neuralink, which he co-founded in 2016, and the tunneling company the Boring Company, which he founded in 2017. In November 2025, a Tesla pay package worth $1 trillion for Musk was approved, which he is to receive over 10 years if he meets specific goals.
-    """
-    
-    system_prompt = f"""given the following {information} i want to create :
-    1. a short summary of the information
-    2. interesting facts about the information
-    """
-    
-    prompt = PromptTemplate(
-        template=system_prompt,
-        input_variables=["information"]
-    )
-    
-    #llm=ChatOpenAI(temperature=0, model="gpt-5")
-    llm = ChatOllama(model="llama3.1:8b")
-    
-    chain = prompt | llm
-    chain_output = chain.invoke(input={"information": information})
-    
-    print(chain_output.content)
+def find_tool_by_name(tools: List[BaseTool], tool_name: str) -> BaseTool:
+    for tool in tools:
+        if tool.name == tool_name:
+            return tool
+    raise ValueError(f"Tool wtih name {tool_name} not found")
+
 
 if __name__ == "__main__":
-    main()
+    print("Hello LangChain Tools (.bind_tools)!")
+    tools = [get_text_length]
+
+    llm = ChatOpenAI(
+        temperature=0,
+        callbacks=[AgentCallbackHandler()],
+    )
+    llm_with_tools = llm.bind_tools(tools)
+
+    # Start conversation
+    messages = [HumanMessage(content="What is the length of the word: DOG")]
+
+    while True:
+        ai_message = llm_with_tools.invoke(messages)
+
+        # If the model decides to call tools, execute them and return results
+        tool_calls = getattr(ai_message, "tool_calls", None) or []
+        if len(tool_calls) > 0:
+            messages.append(ai_message)
+            for tool_call in tool_calls:
+                # tool_call is typically a dict with keys: id, type, name, args
+                tool_name = tool_call.get("name")
+                tool_args = tool_call.get("args", {})
+                tool_call_id = tool_call.get("id")
+
+                tool_to_use = find_tool_by_name(tools, tool_name)
+                observation = tool_to_use.invoke(tool_args)
+                print(f"observation={observation}")
+
+                messages.append(
+                    ToolMessage(content=str(observation), tool_call_id=tool_call_id)
+                )
+            # Continue loop to allow the model to use the observations
+            continue
+
+        # No tool calls -> final answer
+        print(ai_message.content)
+        break
